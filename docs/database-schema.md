@@ -793,6 +793,216 @@ ORDER BY td.created_at ASC;
 
 ---
 
+## New Tables (Migrations 017–019)
+
+### `onramp_transactions`
+
+**Migration:** `017_create_onramp_transactions.sql`
+
+Stores on-ramp transactions (fiat → stablecoin to Stellar). Counterpart to `transactions` (off-ramp).
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `quote_id` | TEXT | NOT NULL | Quote reference from the on-ramp provider |
+| `state` | TEXT | NOT NULL | Lifecycle state (default: `draft`) |
+| `fiat_amount` | TEXT | NOT NULL | Fiat input amount |
+| `fiat_currency` | TEXT | NOT NULL | Fiat input currency (e.g., `NGN`) |
+| `destination_amount` | TEXT | NOT NULL | Expected stablecoin output amount |
+| `destination_token` | TEXT | NOT NULL | Destination token symbol (e.g., `USDC`) |
+| `destination_address` | TEXT | NOT NULL | Stellar wallet address to receive the stablecoin |
+| `destination_network` | TEXT | NOT NULL | Target network (default: `stellar`) |
+| `provider` | TEXT | NOT NULL | On-ramp provider identifier |
+| `provider_order_id` | TEXT | NULL | Provider-assigned order ID |
+| `rate` | DOUBLE PRECISION | NOT NULL | Exchange rate applied |
+| `deposit_address` | TEXT | NULL | Address the user sends fiat to |
+| `deposit_network` | TEXT | NULL | Network for fiat deposit |
+| `deposit_amount` | TEXT | NULL | Amount the user should deposit |
+| `deposit_token` | TEXT | NULL | Token/currency for deposit |
+| `bridge_tx_hash` | TEXT | NULL | Bridge transaction hash (if a bridge step is involved) |
+| `bridge_status` | TEXT | NULL | Bridge transfer status |
+| `error` | TEXT | NULL | Error message if the transaction failed |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of creation |
+| `updated_at` | BIGINT | NOT NULL | Unix timestamp (ms) of last update |
+| `expires_at` | BIGINT | NULL | Unix timestamp (ms) of quote expiry |
+
+**Valid `state` values:** `draft`, `quoted`, `order_created`, `deposit_pending`, `deposit_confirmed`, `bridge_pending`, `bridge_completed`, `completed`, `failed`, `expired`
+
+---
+
+### `webhook_subscriptions`
+
+**Migration:** `017_create_webhook_subscriptions.sql`
+
+Manages outbound webhook endpoints registered by integrators.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `endpoint_url` | TEXT | NOT NULL | Target URL for webhook delivery |
+| `signing_secret` | TEXT | NOT NULL | HMAC secret for payload signing |
+| `events` | JSONB | NOT NULL | Array of subscribed event types (default: `[]`) |
+| `status` | TEXT | NOT NULL | Subscription status (default: `active`) |
+| `rate_limit_max_per_minute` | INTEGER | NOT NULL | Max deliveries per minute (default: 60) |
+| `description` | TEXT | NULL | Human-readable description |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of creation |
+| `updated_at` | BIGINT | NOT NULL | Unix timestamp (ms) of last update |
+
+---
+
+### `webhook_delivery_logs`
+
+**Migration:** `017_create_webhook_subscriptions.sql`
+
+Audit trail for every webhook delivery attempt.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `subscription_id` | TEXT | NOT NULL | FK → `webhook_subscriptions.id` |
+| `event` | TEXT | NOT NULL | Event type that triggered this delivery |
+| `payload_url` | TEXT | NOT NULL | Endpoint URL used for this attempt |
+| `request_body` | TEXT | NOT NULL | Serialised request payload |
+| `response_status` | INTEGER | NULL | HTTP status code returned by the endpoint |
+| `response_body` | TEXT | NULL | Response body (truncated to 4 KB) |
+| `duration_ms` | BIGINT | NOT NULL | Delivery round-trip duration in milliseconds |
+| `status` | TEXT | NOT NULL | Delivery outcome: `success` or `failed` |
+| `attempt_count` | INTEGER | NOT NULL | Number of delivery attempts (default: 1) |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of delivery attempt |
+
+---
+
+### `ledger_accounts`
+
+**Migration:** `018_create_ledger_tables.sql`
+
+Chart of accounts for the double-entry internal ledger.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `code` | TEXT | NOT NULL | Unique account code (UNIQUE) |
+| `name` | TEXT | NOT NULL | Human-readable account name |
+| `type` | TEXT | NOT NULL | Account type: `asset`, `liability`, `equity`, `revenue`, `expense` |
+| `category` | TEXT | NOT NULL | Functional category (e.g., `bridge_fees`, `treasury`) |
+| `description` | TEXT | NULL | Optional description |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of creation |
+| `updated_at` | BIGINT | NOT NULL | Unix timestamp (ms) of last update |
+
+---
+
+### `ledger_entries`
+
+**Migration:** `018_create_ledger_tables.sql`
+
+Individual debit/credit entries in the double-entry ledger.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `transaction_id` | TEXT | NULL | Associated transaction ID (if applicable) |
+| `account_id` | TEXT | NOT NULL | FK → `ledger_accounts.id` |
+| `entry_type` | TEXT | NOT NULL | `debit` or `credit` |
+| `amount` | TEXT | NOT NULL | Entry amount (string for precision) |
+| `currency` | TEXT | NOT NULL | Currency code (default: `USD`) |
+| `description` | TEXT | NULL | Entry description |
+| `reference_type` | TEXT | NULL | Type of source document (e.g., `offramp`, `fee`) |
+| `reference_id` | TEXT | NULL | ID of the source document |
+| `entry_hash` | TEXT | NOT NULL | Deterministic hash for deduplication (UNIQUE) |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of creation |
+
+---
+
+### `ledger_reconciliation`
+
+**Migration:** `018_create_ledger_tables.sql`
+
+Records reconciliation results comparing external reports to the internal ledger.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `report_id` | TEXT | NOT NULL | External report reference |
+| `account_id` | TEXT | NOT NULL | FK → `ledger_accounts.id` |
+| `reported_balance` | TEXT | NOT NULL | Balance as reported by external source |
+| `ledger_balance` | TEXT | NOT NULL | Balance as computed from `ledger_entries` |
+| `difference` | TEXT | NOT NULL | `reported_balance - ledger_balance` |
+| `status` | TEXT | NOT NULL | `unreconciled`, `reconciled`, or `discrepancy` |
+| `reconciled_at` | BIGINT | NULL | Unix timestamp (ms) of reconciliation |
+| `notes` | TEXT | NULL | Operator notes |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of record creation |
+
+---
+
+### `multisig_proposals`
+
+**Migration:** `019_add_multisig_settlement.sql`
+
+Multi-signer governance proposals for admin/settlement operations.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `description` | TEXT | NOT NULL | Human-readable description of the proposed action |
+| `target` | TEXT | NOT NULL | Target address or resource for the proposal |
+| `value` | NUMERIC(36,0) | NOT NULL | Amount or parameter value |
+| `executed` | BOOLEAN | NOT NULL | Whether the proposal has been executed (default: FALSE) |
+| `executed_by` | TEXT | NULL | Address of the signer who executed the proposal |
+| `executed_at` | BIGINT | NULL | Unix timestamp (ms) of execution |
+| `created_at` | BIGINT | NOT NULL | Unix timestamp (ms) of proposal creation |
+| `expires_at` | BIGINT | NOT NULL | Unix timestamp (ms) after which the proposal is void |
+
+---
+
+### `multisig_signatures`
+
+**Migration:** `019_add_multisig_settlement.sql`
+
+Partial signatures collected for multi-sig proposals.
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | TEXT | NOT NULL | Primary key |
+| `proposal_id` | TEXT | NOT NULL | FK → `multisig_proposals.id` |
+| `signer` | TEXT | NOT NULL | Signing authority's address |
+| `signature` | TEXT | NOT NULL | Cryptographic signature over the proposal |
+| `signed_at` | BIGINT | NOT NULL | Unix timestamp (ms) of signing |
+
+**Constraint:** UNIQUE `(proposal_id, signer)` — one signature per signer per proposal.
+
+---
+
+## Migration History
+
+| # | File | Tables Affected | Date Applied |
+|---|------|----------------|-------------|
+| 001 | `001_create_transactions.sql` | `transactions` | Initial |
+| 002 | `002_add_transaction_analytics_fields.sql` | `transactions` (alter) | — |
+| 003 | `003_create_idempotency_keys.sql` | `idempotency_keys` | — |
+| 004 | `004_create_transaction_notifications.sql` | `transaction_notification_preferences`, `transaction_notification_deliveries` | — |
+| 005 | `005_create_api_keys.sql` | `api_keys`, `api_key_usage_events` | — |
+| 006 | `006_add_transaction_insurance.sql` | `transaction_insurance` | — |
+| 007 | `007_add_transaction_batching.sql` | `transaction_batches`, `batch_transactions` | — |
+| 008 | `008_add_referral_program.sql` | `referral_codes`, `referral_rewards` | — |
+| 009 | `009_add_transaction_scheduling.sql` | `scheduled_transactions` | — |
+| 010a | `010_add_ip_whitelisting.sql` | `ip_whitelist`, `ip_violations` | — |
+| 010b | `010_add_query_indexes.sql` | (indexes only) | — |
+| 010c | `010_create_transaction_disputes.sql` | `transaction_disputes` | — |
+| 011 | `011_add_session_management.sql` | `sessions`, `session_revocations` | — |
+| 012 | `012_add_transaction_signing.sql` | `transaction_signatures`, `signature_verification_logs` | — |
+| 013 | `013_add_audit_logging.sql` | `audit_logs`, `admin_actions`, `audit_log_retention` | — |
+| 014 | `014_add_api_key_scopes.sql` | `api_keys` (alter — scopes column) | — |
+| 015 | `015_enhance_audit_logging.sql` | `api_key_usage_logs`, `sensitive_data_access_logs` | — |
+| 016 | `016_optimize_database_queries.sql` | (indexes + statistics only) | — |
+| 017a | `017_create_onramp_transactions.sql` | `onramp_transactions` | — |
+| 017b | `017_create_webhook_subscriptions.sql` | `webhook_subscriptions`, `webhook_delivery_logs` | — |
+| 018 | `018_create_ledger_tables.sql` | `ledger_accounts`, `ledger_entries`, `ledger_reconciliation` | — |
+| 019 | `019_add_multisig_settlement.sql` | `multisig_proposals`, `multisig_signatures` | — |
+
+> Note: Two files share the `017_` prefix — this should be resolved by renaming one to `017b_` or renumbering subsequent files. Run both; they are idempotent.
+
+---
+
 ## Related Documentation
 
 - [Security Best Practices](./security-best-practices.md)

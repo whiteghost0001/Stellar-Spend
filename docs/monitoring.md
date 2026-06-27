@@ -387,16 +387,21 @@ export async function GET(request: Request) {
 
 Alert thresholds are defined in `src/lib/monitoring.ts` (`ALERT_THRESHOLDS`):
 
-| Alert | Threshold | Severity | Description |
-|---|---|---|---|
-| Error rate critical | ≥ 10 errors/min | P1 | Immediate action required |
-| Error rate warning | ≥ 3 errors/min | P2 | Investigate within 30 minutes |
-| API latency warning | p95 ≥ 3,000 ms | P2 | User experience degraded |
-| API latency critical | p95 ≥ 8,000 ms | P1 | Users experiencing failures |
-| Queue depth warning | ≥ 50 items | P2 | Processing backlog building |
-| Queue depth critical | ≥ 200 items | P1 | Severe processing backlog |
-| Uptime below 99% | < 99% over last 100 checks | P2 | Availability SLA at risk |
-| Uptime below 95% | < 95% over last 100 checks | P1 | Availability SLA breached |
+| Alert | Threshold | Severity | Description | Runbook |
+|---|---|---|---|---|
+| Error rate critical | ≥ 10 errors/min | P1 | Immediate action required | [RB-004](./runbooks/high-error-rate.md) |
+| Error rate warning | ≥ 3 errors/min | P2 | Investigate within 30 minutes | [RB-004](./runbooks/high-error-rate.md) |
+| API latency warning | p95 ≥ 3,000 ms | P2 | User experience degraded | [RB-004](./runbooks/high-error-rate.md) |
+| API latency critical | p95 ≥ 8,000 ms | P1 | Users experiencing failures | [RB-004](./runbooks/high-error-rate.md) |
+| Queue depth warning | ≥ 50 items | P2 | Processing backlog building | [RB-004](./runbooks/high-error-rate.md) |
+| Queue depth critical | ≥ 200 items | P1 | Severe processing backlog | [RB-004](./runbooks/high-error-rate.md) |
+| Uptime below 99% | < 99% over last 100 checks | P2 | Availability SLA at risk | [RB-004](./runbooks/high-error-rate.md) |
+| Uptime below 95% | < 95% over last 100 checks | P1 | Availability SLA breached | [RB-004](./runbooks/high-error-rate.md) |
+| Bridge stuck | Pending > 20 min | P1 | Funds in-flight | [RB-001](./runbooks/stuck-bridge.md) |
+| Provider unavailable | 5 consecutive failures | P1 | No new transactions | [RB-002](./runbooks/provider-outage.md) |
+| DB unhealthy | RDS health check failing | P1 | Full outage | [RB-003](./runbooks/database-failover.md) |
+| DB replication lag | Replica lag > 5 min | P1 | RPO at risk | [RB-003](./runbooks/database-failover.md) |
+| Backup failed | Scheduled job failed | P2 | Recovery point degraded | [RB-005](./runbooks/backup-failure.md) |
 
 ## Notifications & Integrations
 
