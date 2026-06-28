@@ -2,7 +2,6 @@
 
 import {
   useState,
-  useEffect,
   useCallback,
   useRef,
   useMemo,
@@ -18,72 +17,21 @@ import RecentOfframpsTable from "@/components/RecentOfframpsTable";
 import ProgressSteps from "@/components/ProgressSteps";
 import { TransactionProgressModal } from "@/components/TransactionProgressModal";
 import { Header } from "@/components/Header";
-import {
-  TransactionStorage,
-  type Transaction,
-} from "@/lib/transaction-storage";
+import { TransactionStorage } from "@/lib/transaction-storage";
 import {
   pollBridgeStatus,
   pollPayoutStatus,
 } from "@/lib/offramp/utils/polling";
 import type { OfframpStep } from "@/types/stellaramp";
 import { useFunnelTracking } from "@/hooks/useFunnelTracking";
+import { useStellarBalances } from "@/hooks/useStellarBalances";
+import { useWalletTransactions } from "@/hooks/useWalletTransactions";
 import React from "react";
 
 // Memoize sub-components for better performance
 const MemoizedHeader = React.memo(Header);
 const MemoizedProgressSteps = React.memo(ProgressSteps);
 const MemoizedRecentOfframpsTable = React.memo(RecentOfframpsTable);
-
-// ---------------------------------------------------------------------------
-// Horizon balance helpers
-// ---------------------------------------------------------------------------
-
-const HORIZON_URL = "https://horizon.stellar.org";
-// Prefer the env-configured issuer; fall back to the well-known Circle mainnet issuer.
-const USDC_ISSUER =
-  process.env.NEXT_PUBLIC_STELLAR_USDC_ISSUER ||
-  "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-
-function fmt(value: string, fractions: { min: number; max: number }): string {
-  const n = parseFloat(value);
-  if (isNaN(n)) return "0.00";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: fractions.min,
-    maximumFractionDigits: fractions.max,
-  });
-}
-
-async function fetchStellarBalances(
-  publicKey: string,
-): Promise<{ usdc: string; xlm: string }> {
-  try {
-    const res = await fetch(`${HORIZON_URL}/accounts/${publicKey}`);
-    if (!res.ok) return { usdc: "0.00", xlm: "0.00" };
-    const data = await res.json();
-    const balances: Array<{
-      asset_type: string;
-      asset_code?: string;
-      asset_issuer?: string;
-      balance: string;
-    }> = data.balances ?? [];
-
-    const xlmEntry = balances.find((b) => b.asset_type === "native");
-    const usdcEntry = balances.find(
-      (b) =>
-        b.asset_type === "credit_alphanum4" &&
-        b.asset_code === "USDC" &&
-        b.asset_issuer === USDC_ISSUER,
-    );
-
-    return {
-      xlm: xlmEntry ? fmt(xlmEntry.balance, { min: 2, max: 6 }) : "0.00",
-      usdc: usdcEntry ? fmt(usdcEntry.balance, { min: 2, max: 6 }) : "0.00",
-    };
-  } catch {
-    return { usdc: "0.00", xlm: "0.00" };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -101,10 +49,11 @@ export default function StellarSpendDashboard() {
   const { trackStep } = useFunnelTracking();
   const [isPending, startTransition] = useTransition();
 
-  // Balances
-  const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
-  const [xlmBalance, setXlmBalance] = useState<string | null>(null);
-  const [isBalanceLoading, setIsBalanceLoading] = useState(false);
+  // Balances via focused hook
+  const { usdc: usdcBalance, xlm: xlmBalance, isLoading: isBalanceLoading, refresh: refreshBalances } = useStellarBalances(wallet?.publicKey);
+
+  // Transaction history via focused hook
+  const { transactions, reload: reloadTransactions } = useWalletTransactions(wallet?.publicKey);
 
   // Lifted form state (for RightPanel sync)
   const [amount, setAmount] = useState("");
@@ -115,52 +64,11 @@ export default function StellarSpendDashboard() {
   const [modalStep, setModalStep] = useState<OfframpStep>("idle");
   const [modalError, setModalError] = useState<string | undefined>(undefined);
 
-  // Transaction history
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-
   // Form reset key — increment to wipe FormCard fields
   const [formResetKey, setFormResetKey] = useState(0);
 
   // Abort ref for in-flight polling (allows cleanup on unmount / new trade)
   const abortRef = useRef(false);
-
-  // ---------------------------------------------------------------------------
-  // Load balances on wallet connect
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!isConnected || !wallet?.publicKey) {
-      setUsdcBalance(null);
-      setXlmBalance(null);
-      return;
-    }
-
-    setIsBalanceLoading(true);
-    fetchStellarBalances(wallet.publicKey)
-      .then(({ usdc, xlm }) => {
-        setUsdcBalance(usdc);
-        setXlmBalance(xlm);
-      })
-      .catch(() => {
-        setUsdcBalance("0.00");
-        setXlmBalance("0.00");
-      })
-      .finally(() => setIsBalanceLoading(false));
-  }, [isConnected, wallet?.publicKey]);
-
-  // ---------------------------------------------------------------------------
-  // Load transaction history on wallet connect
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!isConnected || !wallet?.publicKey) {
-      startTransition(() => {
-        setTransactions([]);
-      });
-      return;
-    }
-    startTransition(() => {
-      setTransactions(TransactionStorage.getByUser(wallet.publicKey));
-    });
-  }, [isConnected, wallet?.publicKey]);
 
   // ---------------------------------------------------------------------------
   // Wallet handlers
@@ -179,10 +87,8 @@ export default function StellarSpendDashboard() {
     setAmount("");
     setCurrency("");
     setQuote(null);
-    startTransition(() => {
-      setTransactions([]);
-    });
-  }, [disconnect]);
+    reloadTransactions();
+  }, [disconnect, reloadTransactions]);
 
   // ---------------------------------------------------------------------------
   // Pre-flight balance check
@@ -448,16 +354,14 @@ export default function StellarSpendDashboard() {
         setFormResetKey((k: number) => k + 1);
 
         // Refresh balances and history
-        const { usdc, xlm } = await fetchStellarBalances(wallet.publicKey);
-        setUsdcBalance(usdc);
-        setXlmBalance(xlm);
-        setTransactions(TransactionStorage.getByUser(wallet.publicKey));
+        await refreshBalances();
+        reloadTransactions();
       } catch (err: unknown) {
         if (abortRef.current) return; // user navigated away
         const msg =
           err instanceof Error ? err.message : "An unexpected error occurred";
         TransactionStorage.update(txId, { status: "failed", error: msg });
-        setTransactions(TransactionStorage.getByUser(wallet.publicKey));
+        reloadTransactions();
         setModalError(msg);
         setModalStep("error");
       }
