@@ -380,6 +380,7 @@ Supports future-dated transaction scheduling.
 
 ### `ip_whitelist`
 
+**Migration:** `010_add_ip_whitelisting.sql`
 **Migration:** `012_add_ip_whitelisting.sql`
 
 Allowlisted IP addresses or ranges for per-user API access control.
@@ -400,6 +401,7 @@ Allowlisted IP addresses or ranges for per-user API access control.
 
 ### `ip_violations`
 
+**Migration:** `010_add_ip_whitelisting.sql`
 **Migration:** `012_add_ip_whitelisting.sql`
 
 Audit log for requests blocked by IP whitelisting.
