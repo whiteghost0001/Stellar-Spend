@@ -6,6 +6,7 @@ const requiredServerEnvKeys = [
   "BASE_RPC_URL",
   "STELLAR_SOROBAN_RPC_URL",
   "STELLAR_HORIZON_URL",
+  "DATABASE_URL",
 ] as const;
 
 const requiredPublicEnvKeys = [
@@ -66,4 +67,6 @@ export function validateEnv() {
   };
 }
 
-export const env = validateEnv();
+export const env = process.env.VITEST
+  ? ({} as ReturnType<typeof validateEnv>)
+  : validateEnv();

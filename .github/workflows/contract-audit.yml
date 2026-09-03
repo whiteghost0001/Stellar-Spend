@@ -1,0 +1,98 @@
+name: Contract Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contract-audit.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+  schedule:
+    # Weekly advisory database check
+    - cron: '0 4 * * 1'
+
+jobs:
+  static-analysis:
+    name: Static Analysis & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Check formatting
+        run: cd contracts && cargo fmt --check
+
+      - name: Run Clippy (zero warnings)
+        run: cd contracts && cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cd contracts && cargo test
+
+  advisory-scan:
+    name: Dependency Advisory Scan (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Run cargo-audit
+        # Fail on any vulnerability; ignore unfixed noise with --ignore <ID> if needed
+        run: cd contracts && cargo audit --deny warnings
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: contracts/Cargo.lock
+          retention-days: 30
+
+  build-wasm:
+    name: Build Optimised WASM
+    runs-on: ubuntu-latest
+    needs: [static-analysis]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Build optimised WASM
+        run: cd contracts && cargo build --target wasm32-unknown-unknown --release
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-artifacts-${{ github.sha }}
+          path: contracts/target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 30

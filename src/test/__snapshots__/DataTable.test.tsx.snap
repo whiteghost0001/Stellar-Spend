@@ -1,0 +1,202 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`DataTable > matches the snapshot for a basic render 1`] = `
+<DocumentFragment>
+  <div>
+    <div
+      class="hidden md:block overflow-auto"
+      style="max-height: 420px;"
+    >
+      <table
+        aria-label="Test rows"
+        class="w-full min-w-[520px] border-collapse"
+      >
+        <thead
+          class="sticky top-0 z-10"
+        >
+          <tr
+            class="bg-[#c9a962] text-[#0a0a0a]"
+          >
+            <th
+              aria-sort="none"
+              class="px-5 py-2.5 text-[10px] tracking-[0.18em] font-semibold uppercase whitespace-nowrap text-left"
+              scope="col"
+            >
+              <button
+                class="inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-[#0a0a0a]"
+                type="button"
+              >
+                Name
+                <span
+                  aria-hidden="true"
+                  class="text-[8px]"
+                />
+              </button>
+            </th>
+            <th
+              aria-sort="none"
+              class="px-5 py-2.5 text-[10px] tracking-[0.18em] font-semibold uppercase whitespace-nowrap text-right"
+              scope="col"
+            >
+              <button
+                class="inline-flex items-center gap-1 hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-[#0a0a0a]"
+                type="button"
+              >
+                Score
+                <span
+                  aria-hidden="true"
+                  class="text-[8px]"
+                />
+              </button>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            class="border-b transition-colors duration-100 border-[#222222] bg-[#111111] hover:bg-[#1a1a1a]"
+          >
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-left"
+            >
+              Charlie
+            </td>
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-right"
+            >
+              30
+            </td>
+          </tr>
+          <tr
+            class="border-b transition-colors duration-100 border-[#222222] bg-[#0f0f0f] hover:bg-[#1a1a1a]"
+          >
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-left"
+            >
+              Alice
+            </td>
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-right"
+            >
+              10
+            </td>
+          </tr>
+          <tr
+            class="border-b transition-colors duration-100 border-[#222222] bg-[#111111] hover:bg-[#1a1a1a]"
+          >
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-left"
+            >
+              Bob
+            </td>
+            <td
+              class="px-5 py-3 text-xs whitespace-nowrap text-white text-right"
+            >
+              20
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <ul
+      class="md:hidden space-y-2"
+    >
+      <li
+        class="border p-3 space-y-1.5 border-[#222222] bg-[#111111]"
+      >
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Name
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            Charlie
+          </span>
+        </div>
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Score
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            30
+          </span>
+        </div>
+      </li>
+      <li
+        class="border p-3 space-y-1.5 border-[#222222] bg-[#111111]"
+      >
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Name
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            Alice
+          </span>
+        </div>
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Score
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            10
+          </span>
+        </div>
+      </li>
+      <li
+        class="border p-3 space-y-1.5 border-[#222222] bg-[#111111]"
+      >
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Name
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            Bob
+          </span>
+        </div>
+        <div
+          class="flex items-center justify-between gap-3 text-xs"
+        >
+          <span
+            class="text-[10px] tracking-widest uppercase text-[#777777]"
+          >
+            Score
+          </span>
+          <span
+            class="text-right text-white"
+          >
+            20
+          </span>
+        </div>
+      </li>
+    </ul>
+  </div>
+</DocumentFragment>
+`;

@@ -1,0 +1,30 @@
+# values-production.yaml — override defaults for production
+
+replicaCount: 2
+
+image:
+  tag: latest
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+env:
+  NODE_ENV: production
+  PORT: "3000"
+  NEXT_PUBLIC_ENV: production
+
+existingSecret: stellar-spend-secrets

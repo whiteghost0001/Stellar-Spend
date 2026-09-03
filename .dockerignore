@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Development artifacts
+node_modules
+.next
+out
+
+# Environment files (secrets must never enter the image)
+.env
+.env.*
+!.env.example
+
+# Test / CI artifacts
+coverage
+playwright-report
+playwright/.auth
+test-results
+.storybook
+src/stories
+
+# Documentation
+docs
+*.md
+!README.md
+
+# Build tooling not needed in image
+terraform
+k8s
+scripts
+.claude
+.vscode
+stryker.conf.json
+vitest*.config.ts
+playwright.config.ts
+eslint.config.js
+postcss.config.mjs
+
+# Logs
+npm-debug.log*
+*.log

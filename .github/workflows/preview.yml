@@ -1,0 +1,148 @@
+name: Preview Environment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  deployments: write
+
+jobs:
+  # ── Deploy preview on open/update ──────────────────────────────────────────
+  deploy-preview:
+    name: Deploy Preview
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.preview_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel environment (preview)
+        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project
+        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          # Sandbox / non-production credentials seeded for preview
+          PAYCREST_API_KEY: ${{ secrets.PREVIEW_PAYCREST_API_KEY }}
+          PAYCREST_WEBHOOK_SECRET: ${{ secrets.PREVIEW_PAYCREST_WEBHOOK_SECRET }}
+          BASE_PRIVATE_KEY: ${{ secrets.PREVIEW_BASE_PRIVATE_KEY }}
+          BASE_RETURN_ADDRESS: ${{ vars.PREVIEW_BASE_RETURN_ADDRESS }}
+          BASE_RPC_URL: ${{ vars.PREVIEW_BASE_RPC_URL }}
+          STELLAR_SOROBAN_RPC_URL: ${{ vars.PREVIEW_STELLAR_SOROBAN_RPC_URL }}
+          STELLAR_HORIZON_URL: ${{ vars.PREVIEW_STELLAR_HORIZON_URL }}
+          NEXT_PUBLIC_STELLAR_SOROBAN_RPC_URL: ${{ vars.PREVIEW_STELLAR_SOROBAN_RPC_URL }}
+          NEXT_PUBLIC_BASE_RETURN_ADDRESS: ${{ vars.PREVIEW_BASE_RETURN_ADDRESS }}
+          NEXT_PUBLIC_STELLAR_USDC_ISSUER: ${{ vars.PREVIEW_STELLAR_USDC_ISSUER }}
+
+      - name: Deploy to Vercel (preview)
+        id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "preview_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Post preview URL to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.preview_url }}';
+            const sha = context.payload.pull_request.head.sha.slice(0, 7);
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                '### 🚀 Preview Deployment',
+                '',
+                `**URL:** ${url}`,
+                `**Commit:** \`${sha}\``,
+                '',
+                'Smoke tests will run against this URL shortly.',
+              ].join('\n'),
+            });
+
+  # ── Smoke tests against the preview URL ────────────────────────────────────
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-preview
+    if: github.event.action != 'closed'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run smoke tests
+        run: npx playwright test e2e/smoke.spec.ts --reporter=github
+        env:
+          BASE_URL: ${{ needs.deploy-preview.outputs.preview_url }}
+
+      - name: Post smoke test result to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}';
+            const icon = status === 'success' ? '✅' : '❌';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${icon} **Smoke tests** ${status} against preview: ${{ needs.deploy-preview.outputs.preview_url }}`,
+            });
+
+  # ── Teardown preview on PR close ───────────────────────────────────────────
+  teardown-preview:
+    name: Teardown Preview
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed'
+
+    steps:
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Remove preview deployment
+        run: |
+          # List and delete all deployments for this branch
+          BRANCH="${{ github.head_ref }}"
+          vercel remove \
+            --safe \
+            --yes \
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            "$(vercel ls --token=${{ secrets.VERCEL_TOKEN }} | grep "$BRANCH" | awk '{print $1}' | head -n 1)" \
+            || true
+
+      - name: Post teardown notice to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🗑️ **Preview environment torn down** (PR closed).',
+            });

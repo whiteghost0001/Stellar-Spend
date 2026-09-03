@@ -1,0 +1,114 @@
+name: Container Security (SBOM & CVE Scan)
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package-lock.json
+      - .github/workflows/container-security.yml
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package-lock.json
+  schedule:
+    # Re-scan weekly even without code changes
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+  security-events: write   # needed to upload SARIF to GitHub Security
+
+env:
+  IMAGE_NAME: stellar-spend
+
+jobs:
+  build-and-scan:
+    name: Build, SBOM & CVE Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the image and export it locally (no push) for scanning
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── SBOM via Syft ────────────────────────────────────────────────────
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom-${{ github.sha }}.spdx.json
+
+      # ── CVE scan via Grype ───────────────────────────────────────────────
+      - name: Scan image for CVEs (Grype)
+        uses: anchore/scan-action@v4
+        id: grype
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: grype-results.sarif
+
+      - name: Upload Grype SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: grype-results.sarif
+          category: grype
+
+      # ── CVE scan via Trivy (second opinion) ─────────────────────────────
+      - name: Scan image for CVEs (Trivy)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      # ── Verify non-root runtime ──────────────────────────────────────────
+      - name: Verify container runs as non-root
+        run: |
+          UID=$(docker run --rm --entrypoint "" \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }} id -u)
+          if [ "$UID" -eq 0 ]; then
+            echo "❌ Container is running as root (uid=0). Failing." >&2
+            exit 1
+          fi
+          echo "✅ Container runs as non-root uid=$UID"
+
+      # ── Image size report ────────────────────────────────────────────────
+      - name: Report image size
+        run: |
+          SIZE=$(docker inspect ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --format='{{.Size}}' | numfmt --to=iec)
+          echo "## 🐳 Docker Image Size" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_NAME }}:${{ github.sha }}\` | $SIZE |" >> $GITHUB_STEP_SUMMARY

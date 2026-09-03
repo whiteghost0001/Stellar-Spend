@@ -16,5 +16,7 @@
   },
   "tailwindCSS.experimental.classRegex": [
     ["cn\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"]
-  ]
+  ],
+  "kiroAgent.configureMCP": "Disabled",
+  "typescript.autoClosingTags": false
 }

@@ -1,0 +1,65 @@
+name: DR Drill
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Every Monday at 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to drill (staging | production)'
+        required: false
+        default: 'staging'
+      rto_target_minutes:
+        description: 'RTO target in minutes'
+        required: false
+        default: '60'
+      rpo_target_minutes:
+        description: 'RPO target in minutes'
+        required: false
+        default: '30'
+
+jobs:
+  dr-drill:
+    runs-on: ubuntu-latest
+    name: DR Drill (${{ github.event.inputs.environment || 'staging' }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Run DR drill
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+          RTO_TARGET_MINUTES: ${{ github.event.inputs.rto_target_minutes || '60' }}
+          RPO_TARGET_MINUTES: ${{ github.event.inputs.rpo_target_minutes || '30' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPORT_DIR: ${{ github.workspace }}
+        run: |
+          chmod +x scripts/test-disaster-recovery.sh
+          scripts/test-disaster-recovery.sh "$ENVIRONMENT"
+
+      - name: Upload drill report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-drill-report-${{ github.run_id }}
+          path: dr-drill-report-*.txt
+          retention-days: 90
+
+      - name: Alert on drill failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":red_circle: *DR Drill FAILED* — environment=${{ github.event.inputs.environment || 'staging' }} run=${{ github.run_id }}\nSee report: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        continue-on-error: true

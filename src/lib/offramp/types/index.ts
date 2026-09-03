@@ -1,17 +1,4 @@
-export type TradeState =
-  | 'draft'
-  | 'quoted'
-  | 'source_tx_submitted'
-  | 'bridge_pending'
-  | 'bridge_completed'
-  | 'payout_order_created'
-  | 'destination_tx_submitted'
-  | 'payout_pending'
-  | 'completed'
-  | 'failed';
-
-export type BridgeStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'expired';
-export type PayoutStatus = 'pending' | 'validated' | 'settled' | 'refunded' | 'expired';
+export type { TradeState, BridgeStatus, PayoutStatus } from '@/lib/transaction-status';
 
 export interface TokenInfo {
   symbol: string;
@@ -45,6 +32,7 @@ export interface BeneficiaryInfo {
   accountName: string;
   currency: string;
   memo?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface ExecuteRequest {
@@ -96,6 +84,7 @@ export interface PayoutOrderRequest {
   network: string;
   rate: number;
   recipient: BeneficiaryInfo;
+  reference: string;
   returnAddress: string;
 }
 

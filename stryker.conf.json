@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/core/schema/stryker-schema.json",
+  "version": "7",
+  "testRunner": "vitest",
+  "testFramework": "vitest",
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/lib/**/*.ts",
+    "src/lib/**/*.tsx",
+    "!src/lib/**/*.test.ts",
+    "!src/lib/**/*.test.tsx",
+    "!src/lib/**/*.d.ts",
+    "src/app/api/**/*.ts",
+    "!src/app/api/**/*.test.ts"
+  ],
+  "mutationGroups": {
+    "money-path": [
+      "src/lib/cache/service.ts",
+      "src/lib/cache/keys.ts",
+      "src/lib/clients/http-client.ts",
+      "src/lib/clients/paycrest.ts",
+      "src/lib/clients/allbridge.ts"
+    ],
+    "security": [
+      "src/lib/clients/http-client.ts"
+    ]
+  },
+  "reporters": [
+    "progress",
+    "progress-append-only",
+    "html",
+    "json",
+    "clear-text"
+  ],
+  "htmlReporter": {
+    "baseDir": "./mutation-report"
+  },
+  "jsonReporter": {
+    "fileName": "./mutation-report/mutation-report.json"
+  },
+  "thresholds": {
+    "high": 80,
+    "medium": 70,
+    "low": 60,
+    "break": 55
+  },
+  "timeoutMS": 8000,
+  "timeoutFactor": 1.5,
+  "maxConcurrentTestRunners": 4,
+  "plugins": [
+    "@stryker-mutator/typescript-checker"
+  ],
+  "checkers": [
+    "typescript"
+  ],
+  "tsconfigFile": "tsconfig.json",
+  "testRunnerNodeArgs": ["--experimental-vm-modules"],
+  "vitest": {
+    "configFile": "vitest.mutation.config.ts"
+  }
+}

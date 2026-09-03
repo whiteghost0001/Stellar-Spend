@@ -1,0 +1,196 @@
+name: Terraform
+
+on:
+  push:
+    paths:
+      - "terraform/**"
+  pull_request:
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check -recursive
+        working-directory: terraform
+
+      - name: Terraform Init (local backend)
+        id: init
+        run: terraform init -backend=false -input=false
+        working-directory: terraform
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+        working-directory: terraform
+
+      - name: Post validation summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = [
+              '#### Terraform Format 🖌 `${{ steps.fmt.outcome }}`',
+              '#### Terraform Init ⚙️ `${{ steps.init.outcome }}`',
+              '#### Terraform Validate ✅ `${{ steps.validate.outcome }}`',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output,
+            });
+
+  plan-staging:
+    name: Plan (staging)
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=stellar-spend/staging/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}" \
+            -input=false
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Plan (staging)
+        id: plan_staging
+        run: |
+          terraform plan \
+            -var-file=envs/staging.tfvars \
+            -var="paycrest_api_key=${{ secrets.PAYCREST_API_KEY }}" \
+            -var="paycrest_webhook_secret=${{ secrets.PAYCREST_WEBHOOK_SECRET }}" \
+            -var="base_private_key=${{ secrets.BASE_PRIVATE_KEY }}" \
+            -var="database_url=${{ secrets.DATABASE_URL }}" \
+            -input=false \
+            -no-color \
+            -out=tfplan-staging
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Cost estimation (staging)
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Run Infracost (staging)
+        run: |
+          infracost breakdown \
+            --path terraform \
+            --terraform-plan-flags="-var-file=envs/staging.tfvars" \
+            --format json \
+            --out-file /tmp/infracost-staging.json
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Post cost estimate to PR
+        uses: infracost/actions/comment@v3
+        with:
+          path: /tmp/infracost-staging.json
+          behavior: update
+
+  plan-production:
+    name: Plan (production)
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=stellar-spend/production/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}" \
+            -input=false
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+
+      - name: Terraform Plan (production)
+        id: plan_prod
+        run: |
+          terraform plan \
+            -var-file=envs/production.tfvars \
+            -var="paycrest_api_key=${{ secrets.PAYCREST_API_KEY_PROD }}" \
+            -var="paycrest_webhook_secret=${{ secrets.PAYCREST_WEBHOOK_SECRET_PROD }}" \
+            -var="base_private_key=${{ secrets.BASE_PRIVATE_KEY_PROD }}" \
+            -var="database_url=${{ secrets.DATABASE_URL_PROD }}" \
+            -input=false \
+            -no-color \
+            -out=tfplan-production
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Cost estimation (production)
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Run Infracost (production)
+        run: |
+          infracost breakdown \
+            --path terraform \
+            --terraform-plan-flags="-var-file=envs/production.tfvars" \
+            --format json \
+            --out-file /tmp/infracost-production.json
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+
+      - name: Post cost estimate to PR
+        uses: infracost/actions/comment@v3
+        with:
+          path: /tmp/infracost-production.json
+          behavior: update

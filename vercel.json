@@ -1,0 +1,27 @@
+{
+  "functions": {
+    "api/offramp/quote": {
+      "maxDuration": 30
+    },
+    "api/offramp/execute-payout": {
+      "maxDuration": 60
+    },
+    "api/offramp/bridge/build-tx": {
+      "maxDuration": 30
+    },
+    "api/offramp/bridge/status/*": {
+      "maxDuration": 30
+    },
+    "api/offramp/status/*": {
+      "maxDuration": 30
+    }
+  },
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_ENV": "preview"
+  }
+}

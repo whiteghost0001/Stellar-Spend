@@ -1,0 +1,2215 @@
+openapi: 3.0.3
+
+info:
+  title: Stellar-Spend API
+  description: |
+    Stellar-Spend converts Stellar USDC to fiat currency (off-ramp) using the
+    Allbridge cross-chain bridge and Paycrest fiat settlement layer.
+
+    ## Authentication
+
+    | Route group | Auth method |
+    |---|---|
+    | `/api/offramp/*` (legacy) | None — server-side secrets only |
+    | `/api/v1/*` | API key via `X-API-Key` or `Authorization: Bearer` |
+    | `/api/api-keys/*` | Admin bearer token via `Authorization: Bearer <API_KEY_ADMIN_TOKEN>` |
+    | `/api/auth/2fa/*` | Public — user-supplied credentials in body |
+    | `/api/webhooks/paycrest` | HMAC-SHA256 via `X-Paycrest-Signature` |
+
+    ## API Key Scopes
+
+    | Scope | Endpoints |
+    |---|---|
+    | `offramp:read` | GET currencies, institutions, rate, bridge status |
+    | `offramp:write` | POST quote, build-tx, submit-soroban, paycrest order |
+    | `webhook:read` | Receive webhook events |
+
+    ## Rate Limits
+
+    `/api/v1/*` endpoints are rate-limited per API key.
+
+    Default: **120 requests / 60 seconds**. The following headers are returned on
+    every response:
+
+    | Header | Description |
+    |---|---|
+    | `X-RateLimit-Limit` | Maximum requests in the current window |
+    | `X-RateLimit-Remaining` | Requests remaining in the current window |
+    | `X-RateLimit-Reset` | Unix timestamp when the window resets |
+    | `Retry-After` | Seconds to wait (only on `429` responses) |
+
+    When the limit is exceeded the server returns `429 Too Many Requests`.
+
+    ## Versioning
+
+    All routes are available under `/api/v1/`. Legacy `/api/` routes are deprecated
+    (sunset `2026-01-01`) and return `Deprecation`, `Sunset`, and `Link` headers.
+
+    Version can also be negotiated with:
+    - `X-API-Version: 1`
+    - `Accept: application/vnd.stellarspend.v1+json`
+
+    The full lifecycle policy — what forces a new major version, when v2 is cut,
+    how long a deprecated version keeps working, and the deprecation header
+    contract — is documented in
+    [`docs/api-versioning.md`](https://github.com/Lex-Studios/Stellar-Spend/blob/main/docs/api-versioning.md).
+    Supported versions can be discovered at runtime via `GET /api/versions`.
+
+    This document remains the source of truth for the API contract itself; the
+    policy document is authoritative only for version lifecycle decisions.
+
+    ## Idempotency
+
+    Mutating endpoints support the `Idempotency-Key` header. Replay responses
+    include `Idempotency-Status: replayed`; conflicts return `409`.
+
+    Key lifetime: 24 hours (configurable via `IDEMPOTENCY_TTL_MS`).
+
+    ## API Changelog
+
+    ### v1.1.0 — 2026-06-29
+    - Added `X-RateLimit-*` headers to all `/api/v1/*` responses
+    - Added `Idempotency-Status` response header documentation
+    - Added API key scope documentation
+    - Added interactive Swagger UI at `/api/docs`
+    - Added `docs/integrator-guide.md` for third-party SDK integrators
+
+    ### v1.0.0 — 2026-01-01
+    - Initial public API release
+    - Versioned routes under `/api/v1/` with API key authentication
+    - Legacy `/api/offramp/*` routes deprecated (sunset 2026-01-01)
+    - Idempotency support on all mutating endpoints
+    - Webhook HMAC-SHA256 signature verification
+
+  version: "1.1.0"
+  contact:
+    name: Stellar-Spend
+    url: https://github.com/Lex-Studios/Stellar-Spend
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+  - url: https://your-domain.com
+    description: Production
+
+tags:
+  - name: health
+    description: Service health and version
+  - name: offramp
+    description: Off-ramp flow — currencies, quotes, bridge, payout
+  - name: bridge
+    description: Allbridge Stellar→Base USDC bridge
+  - name: paycrest
+    description: Paycrest fiat payout orders
+  - name: webhooks
+    description: Inbound event webhooks
+  - name: api-keys
+    description: Programmatic API key management (admin)
+  - name: auth
+    description: Two-factor authentication
+  - name: transactions
+    description: Transaction history and management
+  - name: notifications
+    description: User notification preferences
+  - name: fx-rates
+    description: Foreign-exchange rates
+  - name: versions
+    description: API version discovery
+
+# ─────────────────────────────────────────────────────────────────
+# Security Schemes
+# ─────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Programmatic API key for `/api/v1/*` endpoints
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        For `/api/v1/*` endpoints use a programmatic API key.
+        For `/api/api-keys/*` admin endpoints use `API_KEY_ADMIN_TOKEN`.
+    PaycrestSignature:
+      type: apiKey
+      in: header
+      name: X-Paycrest-Signature
+      description: HMAC-SHA256 hex digest of the raw request body (webhook only)
+
+  # ───────── Reusable response headers ─────────
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window
+      schema:
+        type: integer
+        example: 120
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window
+      schema:
+        type: integer
+        example: 115
+    X-RateLimit-Reset:
+      description: Unix timestamp (seconds) when the current rate-limit window resets
+      schema:
+        type: integer
+        example: 1751234567
+    Retry-After:
+      description: Seconds to wait before retrying (only present on 429 responses)
+      schema:
+        type: integer
+        example: 12
+    X-Request-Id:
+      description: Unique identifier for this request, useful for correlating logs
+      schema:
+        type: string
+        example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+  # ───────── Reusable schemas ─────────
+  schemas:
+    # Standard error contract returned by every API route (src/lib/error-handler.ts,
+    # src/lib/error-types.ts). Every 4xx/5xx JSON response body conforms to this shape —
+    # there is a single error contract used across the entire API surface.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code, stable across releases. Safe to branch client logic on.
+          enum:
+            - validation_error
+            - not_found
+            - unauthorized
+            - forbidden
+            - conflict
+            - rate_limit_exceeded
+            - server_error
+            - external_service_error
+          example: validation_error
+        message:
+          type: string
+          description: Human-readable description of the error, safe to display to end users.
+          example: Invalid request parameters
+        details:
+          type: object
+          description: >
+            Additional machine-readable context (e.g. per-field validation failures).
+            Only populated outside production; omitted entirely when production hides internals.
+          additionalProperties: true
+
+    ValidationError:
+      description: Error response for validation_error, with per-field detail messages.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [error, details]
+          properties:
+            error:
+              type: string
+              enum: [validation_error]
+            details:
+              type: object
+              additionalProperties:
+                type: string
+              example:
+                amount: amount must be a positive number
+                "recipient.institution": recipient.institution is required
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-04-22T22:30:11.068Z"
+        version:
+          type: string
+          example: 1.0.0
+
+    Currency:
+      type: object
+      properties:
+        code:
+          type: string
+          example: NGN
+        name:
+          type: string
+          example: Nigerian Naira
+        symbol:
+          type: string
+          example: "₦"
+
+    Institution:
+      type: object
+      properties:
+        code:
+          type: string
+          example: ACCESS
+        name:
+          type: string
+          example: Access Bank
+
+    QuoteRequest:
+      type: object
+      required: [amount, currency, feeMethod]
+      properties:
+        amount:
+          type: string
+          example: "100"
+        currency:
+          type: string
+          example: NGN
+        feeMethod:
+          type: string
+          enum: [USDC, XLM, stablecoin, native]
+          example: USDC
+
+    QuoteResponse:
+      type: object
+      properties:
+        destinationAmount:
+          type: string
+          example: "155000.00"
+        rate:
+          type: number
+          example: 1550.0
+        currency:
+          type: string
+          example: NGN
+        expiresIn:
+          type: integer
+          example: 300
+
+    VerifyAccountRequest:
+      type: object
+      required: [institution, accountIdentifier]
+      properties:
+        institution:
+          type: string
+          example: ACCESS
+        accountIdentifier:
+          type: string
+          example: "0123456789"
+
+    VerifyAccountResponse:
+      type: object
+      properties:
+        accountName:
+          type: string
+          example: John Doe
+
+    GasFeeOptions:
+      type: object
+      properties:
+        feeOptions:
+          type: object
+          properties:
+            native:
+              type: object
+              properties:
+                int:
+                  type: string
+                  example: "1000000"
+                float:
+                  type: string
+                  example: "1.0"
+            stablecoin:
+              type: object
+              properties:
+                int:
+                  type: string
+                  example: "500000"
+                float:
+                  type: string
+                  example: "0.5"
+
+    BuildTxRequest:
+      type: object
+      required: [amount, fromAddress, toAddress]
+      properties:
+        amount:
+          type: string
+          example: "99.5"
+        fromAddress:
+          type: string
+          description: Stellar G... sender address
+          example: GABC123XYZ
+        toAddress:
+          type: string
+          description: Base 0x... recipient address
+          example: "0xabc123def456"
+        feePaymentMethod:
+          type: string
+          enum: [stablecoin, native]
+          default: stablecoin
+
+    BuildTxResponse:
+      type: object
+      properties:
+        xdr:
+          type: string
+          example: "AAAAAgAAAA..."
+        sourceToken:
+          $ref: "#/components/schemas/TokenInfo"
+        destinationToken:
+          $ref: "#/components/schemas/TokenInfo"
+
+    TokenInfo:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: USDC
+        decimals:
+          type: integer
+          example: 7
+        contract:
+          type: string
+          example: CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75
+        chain:
+          type: string
+          example: SRB
+
+    SubmitSorobanRequest:
+      type: object
+      required: [signedXdr]
+      properties:
+        signedXdr:
+          type: string
+          example: "AAAAAgAAAA..."
+
+    TxStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [PENDING, SUCCESS, FAILED, NOT_FOUND]
+          example: PENDING
+        hash:
+          type: string
+          example: abc123def456
+
+    BridgeStatusResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [pending, processing, completed, failed, expired]
+              example: completed
+            txHash:
+              type: string
+              example: abc123def456
+            receiveAmount:
+              type: string
+              example: "99.0"
+
+    Recipient:
+      type: object
+      required: [institution, accountIdentifier, accountName, currency]
+      properties:
+        institution:
+          type: string
+          example: ACCESS
+        accountIdentifier:
+          type: string
+          example: "0123456789"
+        accountName:
+          type: string
+          example: John Doe
+        currency:
+          type: string
+          example: NGN
+
+    CreateOrderRequest:
+      type: object
+      required: [amount, rate, token, network, reference, returnAddress, recipient]
+      properties:
+        amount:
+          type: number
+          example: 99.0
+        rate:
+          type: number
+          example: 1550.0
+        token:
+          type: string
+          example: USDC
+        network:
+          type: string
+          example: base
+        reference:
+          type: string
+          example: ref-unique-123
+        returnAddress:
+          type: string
+          example: "0xabc123def456"
+        recipient:
+          $ref: "#/components/schemas/Recipient"
+
+    CreateOrderResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              example: order-uuid
+            receiveAddress:
+              type: string
+              example: "0xpaycrest-deposit-address"
+
+    OrderStatusResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              example: order-uuid
+            status:
+              type: string
+              enum: [pending, validated, settled, refunded, expired]
+              example: settled
+
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+          example: uuid
+        name:
+          type: string
+          example: Production Partner
+        keyPrefix:
+          type: string
+          example: abc123def456
+        status:
+          type: string
+          enum: [active, revoked, rotated]
+          example: active
+        rateLimitMaxRequests:
+          type: integer
+          example: 120
+        rateLimitWindowMs:
+          type: integer
+          example: 60000
+
+    CreateApiKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: Production Partner
+        rateLimitMaxRequests:
+          type: integer
+          example: 120
+        rateLimitWindowMs:
+          type: integer
+          example: 60000
+
+    CreateApiKeyResponse:
+      type: object
+      properties:
+        data:
+          allOf:
+            - $ref: "#/components/schemas/ApiKey"
+            - type: object
+              properties:
+                plaintextKey:
+                  type: string
+                  example: ssp_live_abc123def456.very-secret-value
+
+    NotificationPreferences:
+      type: object
+      properties:
+        userAddress:
+          type: string
+          example: "GABC..."
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        phoneNumber:
+          type: string
+          example: "+2348000000000"
+        emailEnabled:
+          type: boolean
+          example: true
+        smsEnabled:
+          type: boolean
+          example: false
+        notifyOnPending:
+          type: boolean
+          example: true
+        notifyOnCompleted:
+          type: boolean
+          example: true
+        notifyOnFailed:
+          type: boolean
+          example: true
+
+    TwoFASetupRequest:
+      type: object
+      required: [userId, method]
+      properties:
+        userId:
+          type: string
+          example: user-wallet-address
+        method:
+          type: string
+          enum: [totp, sms]
+          example: totp
+
+    TwoFASetupResponse:
+      type: object
+      properties:
+        method:
+          type: string
+          example: totp
+        secret:
+          type: string
+          example: JBSWY3DPEHPK3PXP
+        uri:
+          type: string
+          example: "otpauth://totp/StellarSpend:user?secret=JBSWY3DPEHPK3PXP&issuer=StellarSpend"
+        backupCodes:
+          type: array
+          items:
+            type: string
+          example: ["abc123", "def456"]
+
+    TwoFAVerifyRequest:
+      type: object
+      required: [userId, code, method]
+      properties:
+        userId:
+          type: string
+          example: user-wallet-address
+        code:
+          type: string
+          example: "123456"
+        method:
+          type: string
+          enum: [totp, backup]
+          example: totp
+        secret:
+          type: string
+          description: Required when method is totp
+          example: JBSWY3DPEHPK3PXP
+        backupCodes:
+          type: array
+          description: Required when method is backup
+          items:
+            type: string
+
+# ─────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [health]
+      summary: Service health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: Service health check (v1)
+      operationId: getHealthV1
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  # ── Version discovery ────────────────────────────────────────────
+  /api/versions:
+    get:
+      tags: [versions]
+      summary: List supported API versions
+      operationId: getVersions
+      responses:
+        "200":
+          description: Supported versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        version:
+                          type: string
+                          example: v1
+                        status:
+                          type: string
+                          example: supported
+                        prefix:
+                          type: string
+                          example: /api/v1
+
+  # ── FX Rates ─────────────────────────────────────────────────────
+  /api/fx-rates:
+    get:
+      tags: [fx-rates]
+      summary: Get current FX rates
+      operationId: getFxRates
+      responses:
+        "200":
+          description: FX rate data
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/v1/fx-rates:
+    get:
+      tags: [fx-rates]
+      summary: Get current FX rates (v1)
+      operationId: getFxRatesV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: FX rate data
+        "401":
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Currencies ───────────────────────────────────────────────────
+  /api/offramp/currencies:
+    get:
+      tags: [offramp]
+      summary: List supported fiat currencies
+      operationId: getCurrencies
+      description: Returns supported currencies. Response is cached for 5 minutes.
+      responses:
+        "200":
+          description: List of currencies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Currency"
+              example:
+                data:
+                  - code: NGN
+                    name: Nigerian Naira
+                    symbol: "₦"
+                  - code: KES
+                    name: Kenyan Shilling
+                    symbol: KSh
+        "500":
+          description: Paycrest API unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/currencies:
+    get:
+      tags: [offramp]
+      summary: List supported fiat currencies (v1)
+      operationId: getCurrenciesV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of currencies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Currency"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Paycrest API unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Institutions ─────────────────────────────────────────────────
+  /api/offramp/institutions/{currency}:
+    get:
+      tags: [offramp]
+      summary: List banks/institutions for a fiat currency
+      operationId: getInstitutions
+      parameters:
+        - name: currency
+          in: path
+          required: true
+          schema:
+            type: string
+          example: NGN
+      responses:
+        "200":
+          description: List of institutions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Institution"
+        "400":
+          description: Unsupported or unknown currency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/institutions/{currency}:
+    get:
+      tags: [offramp]
+      summary: List banks/institutions for a fiat currency (v1)
+      operationId: getInstitutionsV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      parameters:
+        - name: currency
+          in: path
+          required: true
+          schema:
+            type: string
+          example: NGN
+      responses:
+        "200":
+          description: List of institutions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Institution"
+        "400":
+          description: Unsupported or unknown currency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Quote ─────────────────────────────────────────────────────────
+  /api/offramp/quote:
+    post:
+      tags: [offramp]
+      summary: Get a USDC → fiat conversion quote
+      operationId: getQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+            example:
+              amount: "100"
+              currency: NGN
+              feeMethod: USDC
+      responses:
+        "200":
+          description: Quote result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteResponse"
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Allbridge or Paycrest quote unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/quote:
+    post:
+      tags: [offramp]
+      summary: Get a USDC → fiat conversion quote (v1)
+      operationId: getQuoteV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+      responses:
+        "200":
+          description: Quote result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteResponse"
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Upstream unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Rate ──────────────────────────────────────────────────────────
+  /api/offramp/rate:
+    get:
+      tags: [offramp]
+      summary: Get current fiat rate for a token
+      operationId: getRate
+      parameters:
+        - name: token
+          in: query
+          schema:
+            type: string
+          example: USDC
+        - name: amount
+          in: query
+          schema:
+            type: string
+          example: "100"
+        - name: currency
+          in: query
+          schema:
+            type: string
+          example: NGN
+      responses:
+        "200":
+          description: Current rate
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Verify Account ───────────────────────────────────────────────
+  /api/offramp/verify-account:
+    post:
+      tags: [offramp]
+      summary: Verify a beneficiary bank account
+      operationId: verifyAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyAccountRequest"
+      responses:
+        "200":
+          description: Verified account name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyAccountResponse"
+        "400":
+          description: Missing fields or account not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Paycrest upstream error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/verify-account:
+    post:
+      tags: [offramp]
+      summary: Verify a beneficiary bank account (v1)
+      operationId: verifyAccountV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyAccountRequest"
+      responses:
+        "200":
+          description: Verified account name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyAccountResponse"
+        "400":
+          description: Missing fields or account not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Bridge: Gas Fee Options ───────────────────────────────────────
+  /api/offramp/bridge/gas-fee-options:
+    get:
+      tags: [bridge]
+      summary: Get Allbridge gas fee options
+      operationId: getGasFeeOptions
+      description: Returns available fee options. Cached for 60 seconds.
+      responses:
+        "200":
+          description: Available fee options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GasFeeOptions"
+        "500":
+          description: Chain details or token not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Allbridge SDK timeout or unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/bridge/gas-fee-options:
+    get:
+      tags: [bridge]
+      summary: Get Allbridge gas fee options (v1)
+      operationId: getGasFeeOptionsV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Available fee options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GasFeeOptions"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Bridge: Build TX ─────────────────────────────────────────────
+  /api/offramp/bridge/build-tx:
+    post:
+      tags: [bridge]
+      summary: Build unsigned Soroban XDR for bridge transfer
+      operationId: buildBridgeTx
+      description: Rate-limited per IP. Returns an unsigned XDR for the wallet to sign.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildTxRequest"
+      responses:
+        "200":
+          description: Unsigned XDR transaction
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildTxResponse"
+        "400":
+          description: Invalid amount, address, or feePaymentMethod
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              $ref: "#/components/headers/Retry-After"
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Simulation failed or chain unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/bridge/build-tx:
+    post:
+      tags: [bridge]
+      summary: Build unsigned Soroban XDR for bridge transfer (v1)
+      operationId: buildBridgeTxV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildTxRequest"
+      responses:
+        "200":
+          description: Unsigned XDR transaction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildTxResponse"
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Bridge: Submit Soroban ────────────────────────────────────────
+  /api/offramp/bridge/submit-soroban:
+    post:
+      tags: [bridge]
+      summary: Submit a signed Soroban XDR transaction
+      operationId: submitSoroban
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitSorobanRequest"
+      responses:
+        "200":
+          description: Transaction accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TxStatusResponse"
+        "400":
+          description: Missing XDR, RPC error, or transaction rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Soroban RPC not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/offramp/bridge/submit-soroban:
+    post:
+      tags: [bridge]
+      summary: Submit a signed Soroban XDR transaction (v1)
+      operationId: submitSorobanV1
+      security:
+        - ApiKeyHeader: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitSorobanRequest"
+      responses:
+        "200":
+          description: Transaction accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TxStatusResponse"
+        "400":
+          description: RPC error or transaction rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Bridge: TX Status (Soroban) ───────────────────────────────────
+  /api/offramp/bridge/tx-status/{hash}:
+    get:
+      tags: [bridge]
+      summary: Poll Soroban RPC for transaction confirmation
+      operationId: getSorobanTxStatus
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+          example: abc123def456
+      responses:
+        "200":
+          description: Transaction status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TxStatusResponse"
+        "400":
+          description: RPC returned an error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Soroban RPC not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Bridge: Cross-chain status (Allbridge) ────────────────────────
+  /api/offramp/bridge/status/{txHash}:
+    get:
+      tags: [bridge]
+      summary: Poll Allbridge for cross-chain transfer status
+      operationId: getBridgeStatus
+      parameters:
+        - name: txHash
+          in: path
+          required: true
+          schema:
+            type: string
+          example: abc123def456
+      responses:
+        "200":
+          description: Bridge transfer status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BridgeStatusResponse"
+        "500":
+          description: Allbridge SDK error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Paycrest: Create Order ────────────────────────────────────────
+  /api/offramp/paycrest/order:
+    post:
+      tags: [paycrest]
+      summary: Create a Paycrest fiat payout order
+      operationId: createPaycrestOrder
+      description: |
+        Rate-limited per IP. Supports `Idempotency-Key` header for safe retries.
+
+        On the first call with a given key, `Idempotency-Status: created` is returned.
+        Subsequent calls with the same key replay the saved response (`replayed`).
+        A key conflict (same key, different body) returns `409`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          example: order-create-9d9f2b9d-1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "200":
+          description: Order created successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+            Idempotency-Key:
+              schema:
+                type: string
+              description: Echo of the request Idempotency-Key
+            Idempotency-Status:
+              schema:
+                type: string
+                enum: [created, replayed, conflict]
+              description: Whether this is a new response or a replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "409":
+          description: Idempotency key conflict — same key used with a different request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              $ref: "#/components/headers/Retry-After"
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Paycrest: Order Status ────────────────────────────────────────
+  /api/offramp/paycrest/order/{orderId}:
+    get:
+      tags: [paycrest]
+      summary: Get Paycrest order status
+      operationId: getPaycrestOrderStatus
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: order-uuid
+      responses:
+        "200":
+          description: Order status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderStatusResponse"
+        "400":
+          description: Missing orderId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Offramp: Status ───────────────────────────────────────────────
+  /api/offramp/status/{orderId}:
+    get:
+      tags: [paycrest]
+      summary: Poll payout order status (alternative route)
+      operationId: getOfframpStatus
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: order-uuid
+      responses:
+        "200":
+          description: Order status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  id:
+                    type: string
+
+  # ── Webhooks ──────────────────────────────────────────────────────
+  /api/webhooks/paycrest:
+    post:
+      tags: [webhooks]
+      summary: Receive Paycrest payment event webhook
+      operationId: receivePaycrestWebhook
+      security:
+        - PaycrestSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  example: payment_order.settled
+                data:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      example: order-uuid
+            example:
+              event: payment_order.settled
+              data:
+                id: order-uuid
+      responses:
+        "200":
+          description: Webhook received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                    example: true
+        "400":
+          description: Malformed JSON payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid or missing signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/webhooks/paycrest:
+    post:
+      tags: [webhooks]
+      summary: Receive Paycrest payment event webhook (v1)
+      operationId: receivePaycrestWebhookV1
+      security:
+        - PaycrestSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook received
+        "401":
+          description: Invalid signature
+
+  # ── API Keys ──────────────────────────────────────────────────────
+  /api/api-keys:
+    get:
+      tags: [api-keys]
+      summary: List all API keys
+      operationId: listApiKeys
+      security:
+        - BearerAuth: []
+      description: Requires `API_KEY_ADMIN_TOKEN` as bearer token.
+      responses:
+        "200":
+          description: List of API keys (no plaintext secrets)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKey"
+        "401":
+          description: Invalid or missing admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      tags: [api-keys]
+      summary: Create a new API key
+      operationId: createApiKey
+      security:
+        - BearerAuth: []
+      description: |
+        Requires `API_KEY_ADMIN_TOKEN` as bearer token.
+        The plaintext key is returned **once** and cannot be retrieved again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApiKeyRequest"
+      responses:
+        "201":
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateApiKeyResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/api-keys/{id}/rotate:
+    post:
+      tags: [api-keys]
+      summary: Rotate an API key
+      operationId: rotateApiKey
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: uuid
+      responses:
+        "200":
+          description: New key created, old key marked as rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateApiKeyResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/api-keys/{id}/revoke:
+    post:
+      tags: [api-keys]
+      summary: Revoke an API key immediately
+      operationId: revokeApiKey
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  example: Key leaked during credential rotation
+      responses:
+        "200":
+          description: Key revoked
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/api-keys/{id}/usage:
+    get:
+      tags: [api-keys]
+      summary: Get recent usage events for an API key
+      operationId: getApiKeyUsage
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: uuid
+      responses:
+        "200":
+          description: Usage events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── 2FA ───────────────────────────────────────────────────────────
+  /api/auth/2fa/setup:
+    post:
+      tags: [auth]
+      summary: Initiate 2FA setup
+      operationId: setup2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFASetupRequest"
+      responses:
+        "200":
+          description: 2FA setup initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFASetupResponse"
+        "400":
+          description: Invalid userId or method
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/2fa/verify:
+    post:
+      tags: [auth]
+      summary: Verify a 2FA code
+      operationId: verify2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFAVerifyRequest"
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: 2FA verified successfully
+                  verified:
+                    type: boolean
+                    example: true
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # Not yet called by this repo's frontend (setup/verify cover enrollment) — kept
+  # documented so they aren't mistaken for dead code. See #786.
+  /api/auth/2fa/manage:
+    get:
+      tags: [auth]
+      summary: Get 2FA status for a user
+      operationId: get2FAStatus
+      parameters:
+        - name: x-user-id
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current 2FA configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  method:
+                    type: string
+                    nullable: true
+                    enum: [totp, sms, null]
+                  isEnforced:
+                    type: boolean
+                  backupCodesRemaining:
+                    type: integer
+                  lastVerifiedAt:
+                    type: integer
+                    nullable: true
+        "401":
+          description: Missing x-user-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [auth]
+      summary: Enable or disable 2FA for a user
+      operationId: update2FAStatus
+      parameters:
+        - name: x-user-id
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [enable, disable]
+      responses:
+        "200":
+          description: 2FA status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  enabled:
+                    type: boolean
+        "400":
+          description: Invalid action, or 2FA not configured (call /setup first)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing x-user-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/2fa/backup-codes:
+    post:
+      tags: [auth]
+      summary: Regenerate backup codes for a user
+      operationId: regenerateBackupCodes
+      parameters:
+        - name: x-user-id
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: New backup codes generated (previous codes invalidated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backupCodes:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          description: 2FA not configured for this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing x-user-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/2fa/recovery:
+    post:
+      tags: [auth]
+      summary: Recover access after losing a 2FA device (two-step token flow)
+      description: >
+        Call with `userId` only to initiate — issues a short-lived recovery token sent
+        to the user's verified contact. Call again with `recoveryToken` + `newMethod`
+        to complete the reset and re-enroll with a new method.
+      operationId: recover2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [userId]
+                  properties:
+                    userId:
+                      type: string
+                - type: object
+                  required: [recoveryToken, newMethod]
+                  properties:
+                    recoveryToken:
+                      type: string
+                    newMethod:
+                      type: string
+                      enum: [totp, sms]
+      responses:
+        "200":
+          description: Recovery initiated, or completed with new 2FA method details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  expiresAt:
+                    type: integer
+                    description: Present when recovery was just initiated
+                  method:
+                    type: string
+                    description: Present when recovery was completed
+                  secret:
+                    type: string
+                    description: TOTP secret, present only when newMethod is totp
+                  backupCodes:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          description: Invalid or expired recovery token, or malformed request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/2fa/enforcement:
+    get:
+      tags: [auth]
+      summary: Get the org-wide 2FA enforcement policy (admin)
+      operationId: getEnforcementPolicy
+      parameters:
+        - name: x-admin-id
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current enforcement policy
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing x-admin-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [auth]
+      summary: Update the org-wide 2FA enforcement policy (admin)
+      operationId: updateEnforcementPolicy
+      parameters:
+        - name: x-admin-id
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated enforcement policy
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing x-admin-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [auth]
+      summary: Enforce or unenforce 2FA for a specific user (admin)
+      operationId: setUserEnforcement
+      parameters:
+        - name: x-admin-id
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, enforce]
+              properties:
+                userId:
+                  type: string
+                enforce:
+                  type: boolean
+      responses:
+        "200":
+          description: Per-user enforcement updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  isEnforced:
+                    type: boolean
+        "400":
+          description: Missing userId or enforce
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing x-admin-id header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 2FA not configured for this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Notifications ─────────────────────────────────────────────────
+  /api/notifications/preferences:
+    get:
+      tags: [notifications]
+      summary: Get notification preferences for a wallet
+      operationId: getNotificationPreferences
+      parameters:
+        - name: userAddress
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "GABC..."
+      responses:
+        "200":
+          description: Notification preferences (or null if none set)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/NotificationPreferences"
+                      - type: "null"
+
+    put:
+      tags: [notifications]
+      summary: Create or update notification preferences
+      operationId: upsertNotificationPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationPreferences"
+      responses:
+        "200":
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/NotificationPreferences"
+
+  # ── Transactions ──────────────────────────────────────────────────
+  /api/transactions:
+    get:
+      tags: [transactions]
+      summary: List transactions
+      operationId: listTransactions
+      responses:
+        "200":
+          description: Transaction list
+          content:
+            application/json:
+              schema:
+                type: object
+
+    post:
+      tags: [transactions]
+      summary: Create a transaction record
+      operationId: createTransaction
+      description: Supports `Idempotency-Key` header.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                type: object
+        "409":
+          description: Idempotency key conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/transactions/{id}:
+    get:
+      tags: [transactions]
+      summary: Get a single transaction
+      operationId: getTransaction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transaction detail
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    patch:
+      tags: [transactions]
+      summary: Update a transaction
+      operationId: updateTransaction
+      description: Supports `Idempotency-Key` header.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Updated transaction
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/transactions/{id}/notifications:
+    get:
+      tags: [notifications]
+      summary: Get notification delivery records for a transaction
+      operationId: getTransactionNotifications
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delivery tracking records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        transactionId:
+                          type: string
+                        channel:
+                          type: string
+                          enum: [email, sms]
+                        status:
+                          type: string
+                        templateId:
+                          type: string
+                        destination:
+                          type: string

@@ -1,21 +1,79 @@
 @import "tailwindcss";
 
-:root {
+:root,
+[data-theme="dark"] {
   --bg: #0a0a0a;
-  --panel: #111111;
-  --line: #333333;
-  --muted: #777777;
-  --accent: #c9a962;
+  --panel: #131313;
+  --panel-elevated: #1a1a1a;
+  --panel-overlay: #1f1f1f;
+  --line: #2a2a2a;
+  --line-strong: #3a3a3a;
+  --muted: #8a8a8a;
+  --accent: #d4b06a;
+  --accent-hover: #e0c07f;
   --text: #ffffff;
+  --text-subtle: #d0d0d0;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #f87171;
+  --info: #60a5fa;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --panel-elevated: #fafafa;
+  --panel-overlay: #ffffff;
+  --line: #e0e0e0;
+  --line-strong: #cccccc;
+  --muted: #5f5f5f;
+  --accent: #a8821a;
+  --accent-hover: #8f6e15;
+  --text: #0a0a0a;
+  --text-subtle: #333333;
+  --success: #16a34a;
+  --warning: #b45309;
+  --error: #dc2626;
+  --info: #1d4ed8;
+  color-scheme: light;
+}
+
+[data-theme="high-contrast"] {
+  --bg: #000000;
+  --panel: #000000;
+  --panel-elevated: #0a0a0a;
+  --panel-overlay: #0a0a0a;
+  --line: #ffffff;
+  --line-strong: #ffffff;
+  --muted: #ffff00;
+  --accent: #ffff00;
+  --accent-hover: #ffffff;
+  --text: #ffffff;
+  --text-subtle: #ffffff;
+  --success: #00ff00;
+  --warning: #ffff00;
+  --error: #ff6060;
+  --info: #00ffff;
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-panel-overlay: var(--panel-overlay);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
   --color-text: var(--text);
+  --color-text-subtle: var(--text-subtle);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
 
   --font-space-grotesk: var(--font-space-grotesk-source), "Space Grotesk", "IBM Plex Sans", sans-serif;
   --font-ibm-plex-mono: var(--font-ibm-plex-mono-source), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -24,7 +82,15 @@
   --animate-scale-in: scale-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease, fill 0.25s ease, stroke 0.25s ease; }
+
+/* Suppress transitions during initial paint and explicit no-animate theme apply */
+html.theme-no-transition,
+html.theme-no-transition *,
+html.theme-no-transition *::before,
+html.theme-no-transition *::after {
+  transition: none !important;
+}
 
 html, body {
   margin: 0;
@@ -32,9 +98,80 @@ html, body {
   background: radial-gradient(circle at top right, #1a1a1a 0%, var(--bg) 45%);
   color: var(--text);
   font-family: var(--font-ibm-plex-mono-source), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background: radial-gradient(circle at top right, #ececec 0%, var(--bg) 45%);
+}
+
+html[data-theme="high-contrast"],
+html[data-theme="high-contrast"] body {
+  background: var(--bg);
 }
 
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* Global focus styles for accessibility (#396) */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* High contrast mode focus enhancement */
+[data-theme="high-contrast"] a:focus-visible,
+[data-theme="high-contrast"] button:focus-visible,
+[data-theme="high-contrast"] input:focus-visible,
+[data-theme="high-contrast"] textarea:focus-visible,
+[data-theme="high-contrast"] select:focus-visible,
+[data-theme="high-contrast"] [role="button"]:focus-visible,
+[data-theme="high-contrast"] [role="link"]:focus-visible,
+[data-theme="high-contrast"] [tabindex]:not([tabindex="-1"]):focus-visible {
+  outline-width: 3px;
+  outline-offset: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.sr-only:focus,
+.sr-only:active {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+.focus-within\:not-sr-only:focus-within {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: inherit;
+  margin: inherit;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
 
 @keyframes pulse {
   0%, 100% { transform: scale(1); filter: brightness(1); }
@@ -63,6 +200,51 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   animation: var(--animate-scale-in);
 }
 
+
+@keyframes scale-in { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.animate-scale-in { animation: scale-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.65; }
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: var(--line);
+  border-radius: 3px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  display: inline-block;
+  pointer-events: none;
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Shimmer overlay layered on top of the base pulse. */
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton,
+  .skeleton::after { animation: none; }
+}
+
 @utility dot-bounce {
   animation: dot-bounce 1.2s ease-in-out infinite;
 }
@@ -76,4 +258,36 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 @utility racing-border-content {
   background: color-mix(in srgb, var(--color-panel) 88%, black);
+
+}
+
+.theme-toggle .theme-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease;
+  animation: theme-icon-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.theme-toggle:hover .theme-toggle-icon {
+  transform: rotate(20deg);
+}
+
+.theme-toggle:active .theme-toggle-icon {
+  transform: scale(0.85) rotate(-15deg);
+}
+
+@keyframes theme-icon-in {
+  from { transform: rotate(-45deg) scale(0.4); opacity: 0; }
+  to   { transform: rotate(0deg)   scale(1);   opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

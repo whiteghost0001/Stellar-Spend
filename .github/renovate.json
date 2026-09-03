@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "schedule": ["before 6am on Monday"],
+  "timezone": "UTC",
+  "labels": ["dependencies"],
+  "assignees": ["omonxooo-commits"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on the first day of the month"]
+  },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "dependencies"]
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "matchPackagePatterns": ["^@stellar/", "^@allbridge/", "^viem"],
+      "groupName": "stellar-core-deps",
+      "schedule": ["before 6am on Monday"],
+      "automerge": false
+    },
+    {
+      "matchPackagePatterns": ["^next", "^react", "^react-dom"],
+      "groupName": "nextjs-react",
+      "automerge": false
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "dev-dependencies",
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "matchPackagePrefixes": ["@types/"],
+      "groupName": "typescript-types",
+      "automerge": true
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": ["npm ci"],
+    "fileFilters": ["package-lock.json"]
+  }
+}

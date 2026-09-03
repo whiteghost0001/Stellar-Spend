@@ -2,6 +2,9 @@
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { QuoteDisplaySkeleton } from "./skeletons";
+import { useFxRate } from "@/hooks/useFxRate";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 export interface RightPanelProps {
   isConnected: boolean;
@@ -22,12 +25,27 @@ const NGN_FORMATTER = new Intl.NumberFormat("en-NG", {
   maximumFractionDigits: 0,
 });
 
+function getCurrencySymbol(currency: string): string {
+  const symbols: Record<string, string> = {
+    NGN: "₦",
+    USD: "$",
+    EUR: "€",
+    GBP: "£",
+    KES: "KSh",
+    GHS: "₵",
+    ZAR: "R",
+  };
+  return symbols[currency.toUpperCase()] || currency.toUpperCase();
+}
+
 function formatFiat(value: string | number, currency: string): string {
   const num = typeof value === "string" ? parseFloat(value) : value;
   if (isNaN(num)) return "—";
 
+  const symbol = getCurrencySymbol(currency);
+
   if (currency.toUpperCase() === "NGN") {
-    return `₦${NGN_FORMATTER.format(num)}`;
+    return `${symbol}${NGN_FORMATTER.format(num)}`;
   }
 
   try {
@@ -39,7 +57,7 @@ function formatFiat(value: string | number, currency: string): string {
     }).format(num);
   } catch {
     // Fallback for unknown currency codes
-    return `${currency.toUpperCase()} ${new Intl.NumberFormat("en-US", {
+    return `${symbol} ${new Intl.NumberFormat("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(num)}`;
@@ -71,8 +89,17 @@ function HeroPanel({
   isLoadingQuote,
   currency,
   onConnect,
-}: RightPanelProps) {
+  liveRate,
+  flash,
+}: RightPanelProps & { liveRate: number | null; flash: boolean }) {
   const hasAmount = amount && parseFloat(amount) > 0;
+
+  // Prefer live rate over quote rate for realtime payout calculation
+  const effectiveRate = liveRate ?? quote?.rate ?? null;
+  const liveDestination =
+    effectiveRate && hasAmount
+      ? (parseFloat(amount) * effectiveRate).toFixed(2)
+      : quote?.destinationAmount ?? null;
 
   // Derive hero content based on state
   let heroLabel: string;
@@ -81,7 +108,7 @@ function HeroPanel({
 
   if (!isConnected && !isConnecting) {
     heroLabel = "WALLET REQUIRED";
-    heroValue = <span className="text-[#777777]">₦ --</span>;
+    heroValue = <span className="text-[#777777]">{getCurrencySymbol(currency || "NGN")} --</span>;
     heroMeta = "Connect wallet to preview payout";
   } else if (isConnecting) {
     heroLabel = "CONNECTING";
@@ -97,14 +124,19 @@ function HeroPanel({
       </span>
     );
     heroMeta = "Fetching live rate...";
-  } else if (isConnected && hasAmount && quote) {
+  } else if (isConnected && hasAmount && (quote || liveDestination)) {
     heroLabel = "ESTIMATED PAYOUT";
     heroValue = (
-      <span className="text-[#c9a962]">
-        {formatFiat(quote.destinationAmount, quote.currency)}
+      <span
+        className={cn(
+          "text-[#c9a962] transition-colors duration-300",
+          flash && "text-white"
+        )}
+      >
+        {formatFiat(liveDestination ?? quote!.destinationAmount, currency || quote!.currency)}
       </span>
     );
-    heroMeta = `Rate: ${formatRate(quote.rate, quote.currency)}`;
+    heroMeta = `Rate: ${formatRate(effectiveRate ?? quote!.rate, currency || quote!.currency)}`;
   } else {
     heroLabel = "READY TO PAYOUT";
     heroValue = <span className="text-[#777777]">Enter amount</span>;
@@ -139,7 +171,7 @@ function HeroPanel({
         <button
           onClick={onConnect}
           className={cn(
-            "mt-1 w-full py-2.5 text-xs tracking-widest border border-[#c9a962]",
+            "mt-1 w-full py-2.5 min-h-[44px] text-xs tracking-widest border border-[#c9a962]",
             "text-[#c9a962] bg-transparent transition-colors duration-150",
             "hover:bg-[#c9a962] hover:text-[#0a0a0a]",
             "focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c9a962] focus-visible:ring-offset-2 focus-visible:ring-offset-[#111111]"
@@ -177,15 +209,28 @@ function BreakdownRow({ label, value, muted }: BreakdownRowProps) {
 
 export default function RightPanel(props: RightPanelProps) {
   const { quote, isConnected, isLoadingQuote, currency } = props;
+  const { rate: liveRate, flash } = useFxRate();
+
+  // Show full skeleton when loading quote for the first time (no prior quote)
+  if (isLoadingQuote && !quote) {
+    return <QuoteDisplaySkeleton />;
+  }
 
   const platformFeeUsdc =
     quote && parseFloat(props.amount) > 0
       ? `${(parseFloat(props.amount) * 0.0035).toFixed(4)} USDC`
       : "0.35%";
 
+  // Use live rate for payout total when available
+  const effectiveRate = liveRate ?? quote?.rate ?? null;
+  const liveDestination =
+    effectiveRate && props.amount && parseFloat(props.amount) > 0
+      ? (parseFloat(props.amount) * effectiveRate).toFixed(2)
+      : null;
+
   const payoutTotal =
-    isConnected && quote && parseFloat(props.amount) > 0
-      ? formatFiat(quote.destinationAmount, quote.currency)
+    isConnected && (liveDestination || quote) && parseFloat(props.amount) > 0
+      ? formatFiat(liveDestination ?? quote!.destinationAmount, currency || quote!.currency)
       : isLoadingQuote
       ? "..."
       : `— ${currency.toUpperCase()}`;
@@ -193,7 +238,7 @@ export default function RightPanel(props: RightPanelProps) {
   return (
     <div className="flex flex-col gap-4 w-full">
       {/* Hero panel */}
-      <HeroPanel {...props} />
+      <HeroPanel {...props} liveRate={liveRate} flash={flash} />
 
       {/* Settlement breakdown */}
       <div className="border border-[#333333] bg-[#111111] p-5 flex flex-col gap-3">
@@ -222,8 +267,8 @@ export default function RightPanel(props: RightPanelProps) {
           </span>
           <span
             className={cn(
-              "font-space-grotesk font-bold tabular-nums leading-none",
-              isLoadingQuote ? "text-[#777777]" : "text-[#c9a962]"
+              "font-space-grotesk font-bold tabular-nums leading-none transition-colors duration-300",
+              isLoadingQuote ? "text-[#777777]" : flash ? "text-white" : "text-[#c9a962]"
             )}
             style={{ fontSize: "clamp(1.1rem, 2.5vw, 1.5rem)" }}
           >
@@ -231,6 +276,32 @@ export default function RightPanel(props: RightPanelProps) {
           </span>
         </div>
       </div>
+
+      {/* Advanced options */}
+      <CollapsibleSection
+        id="advanced-options"
+        title="Advanced Options"
+        description="Additional settings for power users"
+        defaultOpen={false}
+      >
+        <div className="flex flex-col gap-3">
+          <BreakdownRow
+            label="Bridge Protocol"
+            value="Allbridge"
+            muted
+          />
+          <BreakdownRow
+            label="Settlement Chain"
+            value="Base"
+            muted
+          />
+          <BreakdownRow
+            label="Payout Provider"
+            value="Paycrest"
+            muted
+          />
+        </div>
+      </CollapsibleSection>
     </div>
   );
 }
